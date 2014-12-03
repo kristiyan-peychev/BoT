@@ -3,6 +3,7 @@
 #define CLIENT_T_8J71L2J3
 
 #include <pthread.h>
+#include "room_t.h"
 
 /* FIXME test size, if possible make it bigger */
 #define CLIENT_BUFFER_SIZE 128
@@ -14,6 +15,8 @@ struct client_t {
 	char *cl_write_p;
 	size_t cl_free;
 	pthread_mutex_t *cl_buff_locked;
+
+	struct room_t *cl_room;
 };
 
 /* client.c */

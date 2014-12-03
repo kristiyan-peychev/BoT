@@ -23,7 +23,14 @@ inline void client_buff_clear(struct client_t *target)
 
 static void client_dump_buffer(struct client_t *target) 
 {
-	/* TODO */
+	pthread_mutex_lock(target->cl_buff_locked);
+	if (send(target->cl_sock), target->cl_buff, CLIENT_BUFFER_SIZE, 0) < 0) {
+		perror("send");
+		exit(EXIT_FAILURE);
+	}
+	memset(target->cl_buff, 0, CLIENT_BUFFER_SIZE);
+	target->cl_write_p = target->cl_buff;
+	pthread_mutex_unlock(target->cl_cl_buff_locked);
 }
 
 void client_buff_push(struct client_t *target, char *buff, size_t sz) 
@@ -49,7 +56,7 @@ struct client_t *client_init(void)
 {
 	struct client_t *ret;
 	ret = (struct client_t *) malloc(1 * sizeof(struct client_t)); 
-	
+
 	ret->cl_id = 0;
 	ret->cl_sock = 0;
 	ret->cl_write_p = ret->cl_buff;
@@ -61,6 +68,8 @@ return ret;
 
 inline void client_destroy(struct client_t *target) 
 {
+	if (target == NULL) 
+		return;
 	close(target->cl_sock);
 	pthread_mutex_destroy(target->cl_buff_locked);
 	free(target);

@@ -18,9 +18,13 @@ struct room_t {
 
 /* room.c */
 
+struct room_t *room_init(void);
+void room_destroy(struct room_t *);
+
 void room_set_id(struct room_t *, unsigned);
 char room_add_member(struct room_t *, struct client_t *);
 size_t room_free_space(struct room_t *);
 char room_remove_member(struct room_t *, struct client_t *);
+char room_add_buff(struct room_t *, char *, size_t);
 
 #endif /* end of include guard: ROOM_DX67OSYT */

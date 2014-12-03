@@ -1,4 +1,4 @@
-#include <stdio.h>
+#include <stdio.h> 
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
@@ -17,21 +17,30 @@
 #include "room_t.h"
 #include "status.h"
 
+/* I'm not gonna bother commenting on what each include does */ 
+/* so tough luck if you were expecting anything of the sort. */ 
+
+
 #define PORT "3490"  /* the port users will be connecting to */
 #define BACKLOG 10   /* how many pending connections queue will hold */
 #define BUF_SIZE CLIENT_BUFFER_SIZE
 
 static struct client_t *clients[BACKLOG];
-static unsigned last_client;
+static size_t clients_connected;
+static unsigned _cl_ids;
 
-static fd_set sockets; /* Used for select */
 
 #define ROOM_COUNT 2
 #define SERVER_THREAD_COUNT 1
 /* The server will hold a thread for each room */
 /*static pthread_t rooms[ROOM_COUNT + SERVER_THREAD_COUNT];*/
+
 static struct room_t *rooms[ROOM_COUNT + SERVER_THREAD_COUNT];
 static unsigned last_room; /* index of the last free room */
+
+
+static fd_set sockets; /* Used for select */
+
 
 void build_select_list(int *sockfd, int *highsock)
 { /* Build the fd_set sockets structure */
@@ -48,11 +57,50 @@ void build_select_list(int *sockfd, int *highsock)
 	}
 }
 
-void init_clients(void) 
+static inline unsigned next_id(void) 
+{
+	return _cl_ids++;
+}
+
+static size_t last_client(void) 
+{
+	size_t ret = 0;
+	while (ret < BACKLOG) {
+		if (clients[ret] == NULL) 
+			return ret;
+		++ret;
+	}
+return -1;
+}
+
+static inline void init_clients(void) 
+{ /* Useful only if the clients array is not in the bss sector */
+  /* so there is no point in anyone using this right now */
+	unsigned i = 0;
+	while (i < BACKLOG) 
+		/*clients[i++] = client_init();*/
+		clients[i++] = NULL;
+}
+
+static inline void init_rooms(void) 
+{
+	unsigned i = 0;
+	while (i < ROOM_COUNT + SERVER_THREAD_COUNT) 
+		rooms[i++] = room_init();
+}
+
+static inline void destroy_clients(void) 
 {
 	unsigned i = 0;
 	while (i < BACKLOG) 
-		clients[i++] = client_init();
+		client_destroy(clients[i++]);
+}
+
+static inline void destroy_rooms(void) 
+{
+	unsigned i = 0;
+	while (i < ROOM_COUNT + SERVER_THREAD_COUNT) 
+		room_destroy(rooms[i++]);
 }
 
 void set_nonblocking(int *sock) 
@@ -72,7 +120,7 @@ void set_nonblocking(int *sock)
 	}
 }
 
-int request_room(int request) 
+static int request_room(int request) 
 { /* See if there is any space in the requested room */
 	if (request < 0 || request > ROOM_COUNT) {
 		return -1;
@@ -80,11 +128,12 @@ int request_room(int request)
 	return room_free_space(rooms[request]);
 }
 
-void handle_new_connection(int *sockfd) 
+static void handle_new_connection(int *sockfd) 
 {
 	int connection;
 	char status;
 	int room_request;
+	size_t client_index;
 
 	/* FIXME: Save the IP somewhere, somehow */
 	connection = accept(*sockfd, NULL, NULL); 
@@ -96,24 +145,48 @@ void handle_new_connection(int *sockfd)
 	} else if (last_client == BACKLOG) {
 		/* Error out, server is full */
 		status = STATUS_SERVER_FULL;
-		send(connection, &status, 1, 0);
+		send(connection, &status, sizeof(status), 0);
 		close(connection);
 	} else if (
 		(recv(connection, &room_request, sizeof(room_request), 0) > 0) 
 		&& (request_room(room_request) < 0) 
 		)
-	{ 
+	{ /* Error out, requested room is full */
 		status = STATUS_ROOM_FULL;
-		send(connection, &status, 1, 0);
+		send(connection, &status, sizeof(status), 0);
 		close(connection);
-	} else {
-		clients[last_client] = client_init();
-		client_set_id(clients[last_client], last_client);
-		client_set_sock(clients[last_client], connection);
-		client_buff_clear(clients[last_client]);
+	} else { /* Everything should be fine, connecting client to room */
+		client_index = last_client();
+		clients[client_index] = client_init();
+		client_set_id(clients[client_index], next_id());
+		client_set_sock(clients[client_index], connection);
+		client_buff_clear(clients[client_index]);
 
-		room_add_member(rooms[room_request], clients[last_client]);
-		++last_client;
+		if (room_add_member(rooms[room_request], 
+				clients[client_index])) 
+		{ /* Room is full after all */
+			client_destroy(clients[client_index]);
+			status = STATUS_ROOM_FULL;
+			send(connection, &status, sizeof(status), 0);
+			close(connection);
+		}
+
+		/*++last_client; [> FIXME thread-safe or atomic <]*/
+	}
+}
+
+void read_them_socks(int *sock) 
+{
+	size_t i = 0;
+
+	if (FD_ISSET(*sock, socks)) 
+		handle_new_connection(sock);
+
+	while (i < BACKLOG) {
+		if (FD_ISSET(clients[i], &socks)) {
+			/* DEAL WITH THE DAMN DATA HERE */
+		}
+		++i;
 	}
 }
 
@@ -134,19 +207,19 @@ void *get_in_addr(struct sockaddr *sa)
 
 int main(void)
 {
-	int sockfd, new_fd;  /* listen on sock_fd, new connection on new_fd */
+	int sockfd; /* listen on sock_fd */
 	int *socks, highsock; /* selection list */
 	struct addrinfo hints, *servinfo, *p;
-	struct sockaddr_storage their_addr; /* connector's address information */
+	/*struct sockaddr_storage their_addr; [> connector's address information <]*/
 	struct sigaction sa;
 	socklen_t sin_size;
-	int yes=1;
+	int yes = 1;
 	char s[INET6_ADDRSTRLEN];
 	char buf[BUF_SIZE];
 	int rv, readsocks;
 	struct timeval timeout;
 	
-	last_client = last_room = 0; 
+	/*clients_connected = last_room = _cl_ids = 0;*/
 
 	memset(&hints, 0, sizeof hints);
 	hints.ai_family = AF_UNSPEC; /* Either IPv4 or IPv6 */
@@ -220,7 +293,8 @@ int main(void)
 		} else if (readsocks == 0) {
 			printf("Nothing connected yet, just reporting\n");
 		} else {
-			handle_new_connection(&sockfd);
+			/*handle_new_connection(&sockfd);*/
+			read_them_sockets();
 		}
 	}
 
